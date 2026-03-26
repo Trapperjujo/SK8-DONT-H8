@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stick Skate 3D | Vector Flux</title>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #050505;
+            --accent: #00ffaa;
+            --text: #ffffff;
+            --ui-border: rgba(255, 255, 255, 0.1);
+        }
+        body { margin: 0; overflow: hidden; background: var(--bg); font-family: 'Space Mono', monospace; color: var(--text); }
+        canvas { display: block; filter: contrast(110%); }
+        
+        #ui {
+            position: absolute; inset: 0; pointer-events: none;
+            padding: 40px; display: flex; flex-direction: column; justify-content: space-between;
+            border: 1px solid var(--ui-border); box-sizing: border-box; margin: 20px;
+        }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; }
+        .logo { font-size: 10px; line-height: 1; opacity: 0.8; }
+        .score-wrap { text-align: right; }
+        #score { font-size: 42px; font-weight: 700; color: var(--accent); }
+        #trick-name { font-size: 14px; color: var(--accent); height: 20px; text-transform: uppercase; }
+        
+        .footer { display: flex; justify-content: space-between; align-items: flex-end; }
+        .stats { display: flex; gap: 40px; }
+        .stat-box { border-left: 2px solid var(--accent); padding-left: 15px; }
+        .label { font-size: 9px; text-transform: uppercase; opacity: 0.5; margin-bottom: 5px; }
+        .value { font-size: 24px; font-weight: 700; }
+        
+        #combo { font-size: 12px; color: var(--accent); margin-top: 5px; opacity: 0; }
+        
+        .hints { font-size: 9px; opacity: 0.4; max-width: 200px; text-align: right; }
+        
+        #loading {
+            position: fixed; inset: 0; background: var(--bg); display: flex;
+            flex-direction: column; align-items: center; justify-content: center; z-index: 1000;
+        }
+        .loader-bar { width: 200px; height: 1px; background: rgba(255,255,255,0.1); position: relative; overflow: hidden; margin-top: 10px; }
+        .loader-bar::after { content: ''; position: absolute; inset: 0; background: var(--accent); transform: translateX(-100%); animation: load 2s infinite forwards; }
+        @keyframes load { 100% { transform: translateX(100%); } }
+    </style>
+</head>
+<body>
+    <div id="loading">
+        <div class="logo">VECTOR_FLUX_INIT</div>
+        <div class="loader-bar"></div>
+    </div>
+    
+    <div id="ui">
+        <div class="header">
+            <div class="logo">PROXIMITY_ENGINE_V4.1<br>LOCAL_TIME: <span id="clock">00:00:00</span></div>
+            <div class="score-wrap">
+                <div id="trick-name"></div>
+                <div class="label">Total Trick Score</div>
+                <div id="score">00000</div>
+                <div id="combo">x1 COMBO</div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="label">Velocity_KMH</div>
+                    <div class="value" id="speed">00.0</div>
+                </div>
+                <div class="stat-box">
+                    <div class="label">Air_Control</div>
+                    <div class="value" id="air">NOMINAL</div>
+                </div>
+            </div>
+            <div class="hints">
+                [W_S] ACCELERATE / DECEL<br>
+                [A_D] KINETIC_STEER<br>
+                [SPACE] HYDRAULIC_OLLIE<br>
+                [R] REGENERATE_SPACE
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js",
+                "anime": "https://unpkg.com/animejs@3.2.2/lib/anime.es.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import * as CANNON from 'cannon-es';
+        import anime from 'anime';
+
+        // --- GLOBAL STATE ---
+        let scene, camera, renderer, world;
+        let player, skateboard, boardMesh, particles = [];
+        let physicsBodies = [];
+        let score = 0, currentTrickScore = 0, combo = 1;
+        let keys = {};
+        let isAirborne = false;
+        let airRotation = 0;
+
+        async function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            scene.fog = new THREE.Fog(0x050505, 10, 80);
+
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            const ambient = new THREE.AmbientLight(0x1a1a1a, 5);
+            scene.add(ambient);
+            const spotlight = new THREE.SpotLight(0x00ffaa, 100, 100, Math.PI / 4, 1);
+            spotlight.position.set(0, 40, 20);
+            spotlight.castShadow = true;
+            scene.add(spotlight);
+
+            world = new CANNON.World();
+            world.gravity.set(0, -15, 0); // High gravity for snappier feel
+            world.defaultContactMaterial.friction = 0.5;
+
+            setupLevel();
+            setupSkater();
+            
+            // HUD clock
+            setInterval(() => {
+                document.getElementById('clock').innerText = new Date().toTimeString().split(' ')[0];
+            }, 1000);
+
+            anime({
+                targets: '#loading',
+                opacity: 0,
+                duration: 1000,
+                delay: 1500,
+                easing: 'easeInOutQuad',
+                complete: () => document.getElementById('loading').remove()
+            });
+
+            loop();
+        }
+
+        function setupLevel() {
+            const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane() });
+            groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+            world.addBody(groundBody);
+
+            const grid = new THREE.GridHelper(400, 100, 0x00ffaa, 0x111111);
+            scene.add(grid);
+
+            // Objects
+            createObstacle(new CANNON.Vec3(0, 1, -25), new CANNON.Vec3(10, 2, 12), 0.3); // Mega Ramp
+            createObstacle(new CANNON.Vec3(20, 0, -50), new CANNON.Vec3(15, 1, 15), -0.2); // Slope
+        }
+
+        function createObstacle(pos, size, rotX = 0) {
+            const shape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/2, size.z/2));
+            const body = new CANNON.Body({ mass: 0, shape });
+            body.position.copy(pos);
+            body.quaternion.setFromEuler(rotX, 0, 0);
+            world.addBody(body);
+
+            const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
+            const mat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.copy(body.position);
+            mesh.quaternion.copy(body.quaternion);
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+            
+            const wire = new THREE.LineSegments(
+                new THREE.EdgesGeometry(geo),
+                new THREE.LineBasicMaterial({ color: 0x00ffaa, opacity: 0.15, transparent: true })
+            );
+            mesh.add(wire);
+        }
+
+        function setupSkater() {
+            // Skateboard
+            skateboard = new CANNON.Body({
+                mass: 12,
+                shape: new CANNON.Box(new CANNON.Vec3(0.4, 0.1, 1)),
+                position: new CANNON.Vec3(0, 2, 0),
+                angularDamping: 0.6
+            });
+            world.addBody(skateboard);
+
+            boardMesh = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.2, 2.1), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+            boardMesh.castShadow = true;
+            scene.add(boardMesh);
+            physicsBodies.push({ body: skateboard, mesh: boardMesh });
+
+            // Stick Figure
+            player = new THREE.Group();
+            scene.add(player);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            
+            const parts = {
+                torso: [0.04, 0.8, 0, 1.0],
+                head: [0.12, 0, 1.5],
+                L_Arm: [0.02, 0.5, -0.2, 1.2],
+                R_Arm: [0.02, 0.5, 0.2, 1.2],
+                L_Leg: [0.03, 0.6, -0.15, 0.4],
+                R_Leg: [0.03, 0.6, 0.15, 0.4]
+            };
+
+            for (let name in parts) {
+                const p = parts[name];
+                const mesh = name === 'head' ? new THREE.Mesh(new THREE.SphereGeometry(p[0]), mat) : new THREE.Mesh(new THREE.CylinderGeometry(p[0], p[0], p[1]), mat);
+                mesh.name = name;
+                mesh.position.set(p[2] || 0, p[3] || 0, p[4] || 0);
+                player.add(mesh);
+            }
+        }
+
+        // --- GAME LOGIC ---
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        function applyControls() {
+            const push = 60, turn = 1.2;
+            if (keys['KeyW']) {
+                const f = new CANNON.Vec3(0, 0, -push);
+                skateboard.quaternion.vmult(f, f);
+                skateboard.applyForce(f, skateboard.position);
+            }
+            if (keys['KeyS']) {
+                const f = new CANNON.Vec3(0, 0, push/2);
+                skateboard.quaternion.vmult(f, f);
+                skateboard.applyForce(f, skateboard.position);
+            }
+            if (keys['KeyA']) skateboard.angularVelocity.y += turn;
+            if (keys['KeyD']) skateboard.angularVelocity.y -= turn;
+            
+            if (keys['Space'] && !isAirborne && skateboard.position.y < 0.3) {
+                skateboard.velocity.y = 8;
+                isAirborne = true;
+                airRotation = 0;
+                document.getElementById('air').innerText = 'AIR_ENABLED';
+                spawnParticles(skateboard.position, 0x00ffaa);
+            }
+            if (keys['KeyR']) location.reload();
+        }
+
+        function detectTricks() {
+            if (isAirborne) {
+                const rotDelta = Math.abs(skateboard.angularVelocity.y);
+                airRotation += rotDelta;
+                currentTrickScore += rotDelta * 5;
+                
+                if (airRotation > 10) document.getElementById('trick-name').innerText = '360_KINETIC_SPIN';
+                if (airRotation > 20) document.getElementById('trick-name').innerText = '720_VECTOR_FLIP';
+                
+                anime({ targets: '#combo', opacity: 1, duration: 200 });
+            }
+        }
+
+        function spawnParticles(pos, color) {
+            for (let i = 0; i < 15; i++) {
+                const p = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshBasicMaterial({ color }));
+                p.position.copy(pos);
+                p.userData.vel = new THREE.Vector3((Math.random()-0.5)*0.5, Math.random()*0.5, (Math.random()-0.5)*0.5);
+                p.userData.life = 1.0;
+                scene.add(p);
+                particles.push(p);
+            }
+        }
+
+        const timeStep = 1 / 60;
+        function loop() {
+            requestAnimationFrame(loop);
+            applyControls();
+            detectTricks();
+            world.step(timeStep);
+
+            // Sync Objects
+            physicsBodies.forEach(obj => {
+                obj.mesh.position.copy(obj.body.position);
+                obj.mesh.quaternion.copy(obj.body.quaternion);
+            });
+
+            // Particles
+            particles.forEach((p, i) => {
+                p.position.add(p.userData.vel);
+                p.userData.life -= 0.02;
+                p.scale.setScalar(p.userData.life);
+                if (p.userData.life <= 0) {
+                    scene.remove(p);
+                    particles.splice(i, 1);
+                }
+            });
+
+            // Landing
+            if (isAirborne && skateboard.position.y < 0.25 && skateboard.velocity.y <= 0) {
+                isAirborne = false;
+                document.getElementById('air').innerText = 'NOMINAL';
+                if (currentTrickScore > 50) {
+                    score += Math.round(currentTrickScore * combo);
+                    document.getElementById('score').innerText = score.toString().padStart(5, '0');
+                    spawnParticles(skateboard.position, 0xffffff);
+                    anime({ targets: '#trick-name', opacity: [1, 0], duration: 1000, delay: 500 });
+                    anime({ targets: '#combo', opacity: 0, duration: 500 });
+                }
+                currentTrickScore = 0; airRotation = 0;
+            }
+
+            // Character IK & Animation
+            player.position.copy(skateboard.position);
+            player.position.y += 0.4;
+            player.quaternion.slerp(skateboard.quaternion, 0.1);
+
+            const t = Date.now() * 0.01;
+            const tilt = skateboard.angularVelocity.y * 0.2;
+            player.getObjectByName('L_Arm').rotation.z = Math.sin(t) * 0.5 + tilt;
+            player.getObjectByName('R_Arm').rotation.z = -Math.sin(t) * 0.5 + tilt;
+            player.getObjectByName('torso').rotation.z = -tilt;
+
+            // Push Anim
+            if (keys['KeyW']) {
+                player.getObjectByName('R_Leg').rotation.x = Math.sin(t*2) * 1.2;
+            } else {
+                player.getObjectByName('R_Leg').rotation.x = 0;
+            }
+
+            // Camera
+            const camOffset = new THREE.Vector3(0, 4, 8).applyQuaternion(skateboard.quaternion);
+            camera.position.lerp(new THREE.Vector3().copy(skateboard.position).add(camOffset), 0.1);
+            camera.lookAt(skateboard.position);
+
+            document.getElementById('speed').innerText = (skateboard.velocity.length() * 3.6).toFixed(1);
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        init();
+    </script>
+</body>
+</html>
