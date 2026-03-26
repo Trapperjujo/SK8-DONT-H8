@@ -2,56 +2,56 @@ Shader "VectorFlux/NeonWireframe"
 {
     Properties
     {
-        _Color ("Main Color", Color) = (0, 1, 0.6, 1)
-        _WireThickness ("Wire Thickness", Range(0, 0.1)) = 0.02
-        _Emission ("Emission Intensity", Range(0, 10)) = 2.0
+        _Color ("Neon Color", Color) = (0, 1, 0.6, 1)
+        _Thickness ("Wire Thickness", Range(0.001, 0.5)) = 0.05
+        _Emission ("Emission Intensity", Range(0, 10)) = 2.5
     }
     SubShader
     {
-        Tags { "RenderType"="Opaque" "RenderPipeline"="UniversalPipeline" }
+        Tags { "RenderType"="Opaque" }
         LOD 100
 
         Pass
         {
-            Name "ForwardLit"
-            HLSLPROGRAM
+            CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "UnityCG.cginc"
 
-            struct Attributes
+            struct appdata
             {
-                float4 positionOS : POSITION;
+                float4 vertex : POSITION;
                 float2 uv : TEXCOORD0;
             };
 
-            struct Varyings
+            struct v2f
             {
-                float4 positionCS : SV_POSITION;
                 float2 uv : TEXCOORD0;
+                float4 vertex : SV_POSITION;
             };
 
             float4 _Color;
-            float _WireThickness;
+            float _Thickness;
             float _Emission;
 
-            Varyings vert(Attributes input)
+            v2f vert (appdata v)
             {
-                Varyings output;
-                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
-                output.uv = input.uv;
-                return output;
+                v2f o;
+                o.vertex = UnityObjectToClipPos(v.vertex);
+                o.uv = v.uv;
+                return o;
             }
 
-            float4 frag(Varyings input) : SV_Target
+            fixed4 frag (v2f i) : SV_Target
             {
-                // Simple edge highlights (pseudo-wireframe via UV)
-                float edge = step(input.uv.x, _WireThickness) + step(1.0 - input.uv.x, _WireThickness) +
-                             step(input.uv.y, _WireThickness) + step(1.0 - input.uv.y, _WireThickness);
+                // Geometric Grid Logic (Works in Built-in AND URP)
+                float2 edge = step(i.uv, _Thickness) + step(1.0 - i.uv, _Thickness);
+                float isEdge = saturate(edge.x + edge.y);
                 
-                return _Color * saturate(edge) * _Emission;
+                return _Color * isEdge * _Emission;
             }
-            ENDHLSL
+            ENDCG
         }
     }
+    FallBack "Diffuse"
 }
