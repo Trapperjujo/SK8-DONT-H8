@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stick Skate 3D | Vector Flux</title>
+    <title>Stick Skate 3D | Vector Flux v1.1</title>
     <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -19,9 +19,10 @@
             position: absolute; inset: 0; pointer-events: none;
             padding: 40px; display: flex; flex-direction: column; justify-content: space-between;
             border: 1px solid var(--ui-border); box-sizing: border-box; margin: 20px;
+            z-index: 100;
         }
         .header { display: flex; justify-content: space-between; align-items: flex-start; }
-        .logo { font-size: 10px; line-height: 1; opacity: 0.8; }
+        .logo { font-size: 10px; line-height: 1.2; opacity: 0.8; }
         .score-wrap { text-align: right; }
         #score { font-size: 42px; font-weight: 700; color: var(--accent); }
         #trick-name { font-size: 14px; color: var(--accent); height: 20px; text-transform: uppercase; }
@@ -53,7 +54,7 @@
     
     <div id="ui">
         <div class="header">
-            <div class="logo">PROXIMITY_ENGINE_V4.1<br>LOCAL_TIME: <span id="clock">00:00:00</span></div>
+            <div class="logo">PROXIMITY_ENGINE_V4.1<br>LOCAL_TIME: <span id="clock">00:00:00</span><br>SYSTEM_STATUS: NOMINAL</div>
             <div class="score-wrap">
                 <div id="trick-name"></div>
                 <div class="label">Total Trick Score</div>
@@ -106,6 +107,7 @@
         let keys = {};
         let isAirborne = false;
         let airRotation = 0;
+        let lastTime = 0;
 
         async function init() {
             scene = new THREE.Scene();
@@ -113,7 +115,7 @@
             scene.fog = new THREE.Fog(0x050505, 10, 80);
 
             camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.shadowMap.enabled = true;
@@ -127,16 +129,20 @@
             scene.add(spotlight);
 
             world = new CANNON.World();
-            world.gravity.set(0, -15, 0); // High gravity for snappier feel
+            world.gravity.set(0, -15, 0); 
+            world.broadphase = new CANNON.SAPBroadphase(world);
             world.defaultContactMaterial.friction = 0.5;
 
             setupLevel();
             setupSkater();
             
-            // HUD clock
-            setInterval(() => {
-                document.getElementById('clock').innerText = new Date().toTimeString().split(' ')[0];
-            }, 1000);
+            // HUD clock logic
+            const clockEl = document.getElementById('clock');
+            function updateClock() {
+                clockEl.innerText = new Date().toTimeString().split(' ')[0];
+                requestAnimationFrame(() => setTimeout(updateClock, 1000));
+            }
+            updateClock();
 
             anime({
                 targets: '#loading',
@@ -147,7 +153,7 @@
                 complete: () => document.getElementById('loading').remove()
             });
 
-            loop();
+            requestAnimationFrame(loop);
         }
 
         function setupLevel() {
@@ -158,9 +164,10 @@
             const grid = new THREE.GridHelper(400, 100, 0x00ffaa, 0x111111);
             scene.add(grid);
 
-            // Objects
+            // Obstacles
             createObstacle(new CANNON.Vec3(0, 1, -25), new CANNON.Vec3(10, 2, 12), 0.3); // Mega Ramp
             createObstacle(new CANNON.Vec3(20, 0, -50), new CANNON.Vec3(15, 1, 15), -0.2); // Slope
+            createObstacle(new CANNON.Vec3(-20, 0, -60), new CANNON.Vec3(10, 4, 10), 0.5); // Steep Wall
         }
 
         function createObstacle(pos, size, rotX = 0) {
@@ -171,7 +178,7 @@
             world.addBody(body);
 
             const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
-            const mat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            const mat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.5, roughness: 0.1 });
             const mesh = new THREE.Mesh(geo, mat);
             mesh.position.copy(body.position);
             mesh.quaternion.copy(body.quaternion);
@@ -186,7 +193,6 @@
         }
 
         function setupSkater() {
-            // Skateboard
             skateboard = new CANNON.Body({
                 mass: 12,
                 shape: new CANNON.Box(new CANNON.Vec3(0.4, 0.1, 1)),
@@ -195,12 +201,11 @@
             });
             world.addBody(skateboard);
 
-            boardMesh = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.2, 2.1), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+            boardMesh = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.2, 2.1), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0 }));
             boardMesh.castShadow = true;
             scene.add(boardMesh);
             physicsBodies.push({ body: skateboard, mesh: boardMesh });
 
-            // Stick Figure
             player = new THREE.Group();
             scene.add(player);
             const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
@@ -223,12 +228,11 @@
             }
         }
 
-        // --- GAME LOGIC ---
         window.addEventListener('keydown', e => keys[e.code] = true);
         window.addEventListener('keyup', e => keys[e.code] = false);
 
-        function applyControls() {
-            const push = 60, turn = 1.2;
+        function applyControls(dt) {
+            const push = 3600 * dt, turn = 1.2 * dt * 60; // Scaled to dt
             if (keys['KeyW']) {
                 const f = new CANNON.Vec3(0, 0, -push);
                 skateboard.quaternion.vmult(f, f);
@@ -239,11 +243,11 @@
                 skateboard.quaternion.vmult(f, f);
                 skateboard.applyForce(f, skateboard.position);
             }
-            if (keys['KeyA']) skateboard.angularVelocity.y += turn;
-            if (keys['KeyD']) skateboard.angularVelocity.y -= turn;
+            if (keys['KeyA']) skateboard.angularVelocity.y += turn * 0.1;
+            if (keys['KeyD']) skateboard.angularVelocity.y -= turn * 0.1;
             
-            if (keys['Space'] && !isAirborne && skateboard.position.y < 0.3) {
-                skateboard.velocity.y = 8;
+            if (keys['Space'] && !isAirborne && skateboard.position.y < 0.4) {
+                skateboard.velocity.y = 8.5;
                 isAirborne = true;
                 airRotation = 0;
                 document.getElementById('air').innerText = 'AIR_ENABLED';
@@ -252,24 +256,26 @@
             if (keys['KeyR']) location.reload();
         }
 
-        function detectTricks() {
+        function detectTricks(dt) {
             if (isAirborne) {
-                const rotDelta = Math.abs(skateboard.angularVelocity.y);
+                const rotDelta = Math.abs(skateboard.angularVelocity.y) * dt * 60;
                 airRotation += rotDelta;
-                currentTrickScore += rotDelta * 5;
+                currentTrickScore += rotDelta * 10;
                 
-                if (airRotation > 10) document.getElementById('trick-name').innerText = '360_KINETIC_SPIN';
-                if (airRotation > 20) document.getElementById('trick-name').innerText = '720_VECTOR_FLIP';
+                const tName = document.getElementById('trick-name');
+                if (airRotation > 10) tName.innerText = '360_KINETIC_SPIN';
+                if (airRotation > 20) tName.innerText = '720_VECTOR_FLIP';
+                if (airRotation > 40) tName.innerText = '1080_FLUX_STORM';
                 
                 anime({ targets: '#combo', opacity: 1, duration: 200 });
             }
         }
 
         function spawnParticles(pos, color) {
-            for (let i = 0; i < 15; i++) {
-                const p = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshBasicMaterial({ color }));
+            for (let i = 0; i < 20; i++) {
+                const p = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshBasicMaterial({ color }));
                 p.position.copy(pos);
-                p.userData.vel = new THREE.Vector3((Math.random()-0.5)*0.5, Math.random()*0.5, (Math.random()-0.5)*0.5);
+                p.userData.vel = new THREE.Vector3((Math.random()-0.5)*0.6, Math.random()*0.6, (Math.random()-0.5)*0.6);
                 p.userData.life = 1.0;
                 scene.add(p);
                 particles.push(p);
@@ -277,63 +283,66 @@
         }
 
         const timeStep = 1 / 60;
-        function loop() {
+        function loop(timestamp) {
+            const dt = lastTime ? (timestamp - lastTime) / 1000 : 0;
+            lastTime = timestamp;
+
             requestAnimationFrame(loop);
-            applyControls();
-            detectTricks();
+            applyControls(dt);
+            detectTricks(dt);
             world.step(timeStep);
 
-            // Sync Objects
+            // Sync
             physicsBodies.forEach(obj => {
                 obj.mesh.position.copy(obj.body.position);
                 obj.mesh.quaternion.copy(obj.body.quaternion);
             });
 
             // Particles
-            particles.forEach((p, i) => {
+            for(let i = particles.length-1; i >= 0; i--) {
+                const p = particles[i];
                 p.position.add(p.userData.vel);
-                p.userData.life -= 0.02;
-                p.scale.setScalar(p.userData.life);
+                p.userData.life -= 0.02 * (dt * 60);
+                p.scale.setScalar(Math.max(0, p.userData.life));
                 if (p.userData.life <= 0) {
                     scene.remove(p);
                     particles.splice(i, 1);
                 }
-            });
+            }
 
-            // Landing
-            if (isAirborne && skateboard.position.y < 0.25 && skateboard.velocity.y <= 0) {
+            // Landing Logic
+            if (isAirborne && skateboard.position.y < 0.28 && skateboard.velocity.y <= 0) {
                 isAirborne = false;
                 document.getElementById('air').innerText = 'NOMINAL';
                 if (currentTrickScore > 50) {
                     score += Math.round(currentTrickScore * combo);
                     document.getElementById('score').innerText = score.toString().padStart(5, '0');
                     spawnParticles(skateboard.position, 0xffffff);
-                    anime({ targets: '#trick-name', opacity: [1, 0], duration: 1000, delay: 500 });
+                    anime({ targets: '#trick-name', opacity: [1, 0], duration: 1000, delay: 1000 });
                     anime({ targets: '#combo', opacity: 0, duration: 500 });
                 }
                 currentTrickScore = 0; airRotation = 0;
             }
 
-            // Character IK & Animation
+            // Character Sync
             player.position.copy(skateboard.position);
             player.position.y += 0.4;
-            player.quaternion.slerp(skateboard.quaternion, 0.1);
+            player.quaternion.slerp(skateboard.quaternion, 0.15);
 
-            const t = Date.now() * 0.01;
+            const t = timestamp * 0.005;
             const tilt = skateboard.angularVelocity.y * 0.2;
             player.getObjectByName('L_Arm').rotation.z = Math.sin(t) * 0.5 + tilt;
             player.getObjectByName('R_Arm').rotation.z = -Math.sin(t) * 0.5 + tilt;
             player.getObjectByName('torso').rotation.z = -tilt;
 
-            // Push Anim
             if (keys['KeyW']) {
                 player.getObjectByName('R_Leg').rotation.x = Math.sin(t*2) * 1.2;
             } else {
                 player.getObjectByName('R_Leg').rotation.x = 0;
             }
 
-            // Camera
-            const camOffset = new THREE.Vector3(0, 4, 8).applyQuaternion(skateboard.quaternion);
+            // High-End Camera
+            const camOffset = new THREE.Vector3(0, 4, 9).applyQuaternion(skateboard.quaternion);
             camera.position.lerp(new THREE.Vector3().copy(skateboard.position).add(camOffset), 0.1);
             camera.lookAt(skateboard.position);
 
