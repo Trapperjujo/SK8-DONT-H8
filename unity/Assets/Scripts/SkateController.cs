@@ -19,8 +19,8 @@ namespace VectorFlux
         void Start()
         {
             rb = GetComponent<Rigidbody>();
-            rb.drag = 0.5f;
-            rb.angularDrag = 0.8f;
+            rb.linearDamping = 0.5f;
+            rb.angularDamping = 0.8f;
         }
 
         void Update()
@@ -76,7 +76,7 @@ namespace VectorFlux
             if (state)
             {
                 rb.useGravity = false;
-                rb.velocity = new Vector3(rb.velocity.x, 0, rb.velocity.z);
+                rb.linearVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
             }
             else
             {

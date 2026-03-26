@@ -25,7 +25,7 @@ namespace VectorFlux
             transform.rotation = Quaternion.Lerp(transform.rotation, board.rotation, 0.2f);
 
             timer += Time.deltaTime * 5f;
-            float speed = boardRb.velocity.magnitude;
+            float speed = boardRb.linearVelocity.magnitude;
 
             // Simple procedual sway
             float sway = Mathf.Sin(timer) * 0.2f;
